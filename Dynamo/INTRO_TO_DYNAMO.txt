@@ -1,0 +1,149 @@
+Introduction to DYNAMO
+----------------------
+
+(c) Shai Machnes 2010, Institute of Theoretical Physics, Ulm University, Germany
+email: shai.machnes at uni-ulm.de
+
+For the scientific background, please see arXiv 1011.4874 (http://arxiv.org/abs/1011.4874)
+
+DYNAMO is a flexible framework for quantum optimal control algorithms.
+
+It design is interesting in two ways
+
+    * The computation needed to solve QOC problems is broken down into many sub-modules 
+      (e.g. gradient function, step-size control, etc - details below), and for
+      many building blocks more than one implementation is supplied.
+      Technically, "function handles" (the MATLAB "@" symbols) are used to
+      make capabilities plug-and-play.
+
+    * DYNAMO attempts to minimize calculations by way of Delayed Calculations.
+      Whenever a control field is modified, DYNAMO only marks that value as changed,
+      and the values calculated from it (single-slice exponents, start-to-T and 
+      T-to-end propagators, etc) as stale. Only when a specific value is needed
+      (such as the current fidelity), are the calculations performed. At this point
+      DYNAMO attempts to perform the minimal number of matrix exponentiations and 
+      multiplications to arrive at the desired result.
+      See the functions invalidate_timeslots_calc_cache, recompute_timeslots_now and
+      update_timeslot_controls for the nitty-gritty details.
+
+To learn DYNAMO in-depth, we suggest the following
+
+    * Run run_me_dynamo_demo_00 and run_me_dynamo_demo_01
+    * Study their code
+    * Only then read the rest of this document
+    * If you have any questions, email me (details at top) - I'll be happy to help
+
+DYNAMO makes use of a single global structure, "OC" to maintain all the computational context.
+Going through the structure will give you a better idea of how DYANMO works:
+
+OC
+    const -                     Various constants to be used both internally and by the DYNAMO user
+        termination_reason -    Codes for the various termination reasons, returned by the high-level search functions
+                                Limit values for the various causes below is supplied to the search functions in a structure
+                                typically called "termination_reasons". See the demos for examples.
+            goal_achieved -     Desired fidelity reached
+            loop_count -        Maximal loop count reached
+            wall_time -         Wall-time (i.e. clock) maximum time reached
+            cpu_time -          CPU-time maximum reached
+            gradient_norm -     Gradient norm fell below perscribed limits
+        termination_reason_str - A cell-array of strings matching the numeric codes in OC.const.termination_reason
+
+    config
+
+        uInitial -              The initial DM or gate
+        uFinal -                The final DM or gate
+        hamDrift -              The drift Hamiltonian 
+        numControls -           Number of control Hamiltonians in the array below
+        hamControl -            A 1D cell-array of the control Hamiltonians 
+        totalTime -             Total time alloted for the optimized sequence (total of OC.timeSlots.tau)
+        normType -              String, 'PSU' or 'SU'. Indicates the space in which fidelity is computed (see paper for details)
+        normFunc -              Norm function handle (see SU_norm, PSU_norm for examples)
+        gradientFunc -          Function handle to the gradient function (see gradient_exact, gradient_finite_diff for examples)
+        gradientNormFunc -      Function handle for the function which computes the gradient norm (see gradient_PSU_norm, gradient_SU_norm for examples)
+        normNorm -              Overall normalization of the norm function (computed by initSetNorm)
+        FirstOrder -            Configuration specific to 1st-order search methods
+            step_size -         Current step size (context held between calculations)
+        BFGS -                  Configuration specific to BFGS search methods
+            fminopt -           Structure of options supplied to MATLAB's fminunc
+
+    timeSlots
+
+        nTimeSlots -            Number of timeslots
+        tau -                   Vector containing length-in-time of each slice (usually OC.config.totalTime/nTimeSlots is repeated nTimeSlots times)
+        expmFunc -              Function handle for computing the exponent of a matrix for gradient functions other than gradient_exact (@expm)
+        calcPfromHfunc -        Function handle for computing the exponent of a matrix when using gradient_exact (@calcPfromH_exact_gradient)
+        currPoint -             Context of current point in the search space.
+                                This is where all the calculations are cached.
+                                Most fields have both a value ("X") and indications whether this value needs to be recomputed ("X_stale")
+               controls         Current value of the controls (matrix of size OC.config.numControls by OC.timeSlots.nTimeSlots)
+               H                The current total Hamiltonians for each timeslice
+               H_is_stale       Indication, per timeslice, of staleness of H
+               P                The exponentiated total Hamiltonian for each timeslice
+               P_is_stale       Indication, per timeslice, of staleness of P
+               U                The forward propagator for each timeslice
+               U_is_stale       Indication, per timeslice, of staleness of U
+               L                The backward propagator for each timeslice
+               L_is_stale       Indication, per timeslice, of staleness of L
+               H_needed_now     Interim-step in the computation chain, indicating we an up-to-date value for H is needed right now (per timeslice)
+               P_needed_now     Interim-step in the computation chain, indicating we an up-to-date value for P is needed right now (per timeslice)
+               U_needed_now     Interim-step in the computation chain, indicating we an up-to-date value for U is needed right now (per timeslice)
+               L_needed_now     Interim-step in the computation chain, indicating we an up-to-date value for L is needed right now (per timeslice)
+               curr_Phi0_val    The current (last computed) Phi0 value (i.e. the pre-norm fidelity)
+               curr_Phi0_val_stale      And is it still valid ?
+               curr_val         The current (last computed) fidelity value
+               curr_val                 And is it still valid ?
+
+
+List of files / functions, sorted by role
+    Demo (main) directory
+        run_me_dynamo_demo_00   Simple usage demo
+        run_me_dynamo_demo_01   Multi-algorithm demo
+        qft                     Generate the matrix for a QFT gate
+        randseed                Reset the random-number generator to a given seed value
+
+    Dynamo directory
+        Search functions - Get a subspace mask & termination conditions and perform a search within that subspace
+            First_order_search_function     1st order search function
+            BFGS_search_function            2nd order search function
+
+        Meta search functions - Use one or more search functions repeatedly to perform a search
+                                Input: search function handle(s), submask, stop criteria for the meta-search and the search)
+            Block_cycle_search_function     Select consecutive blocks of timeslices, and perform a search within each block
+            Krotov_search_function          Use Block_cycle_search_function for 1-slice blocks + First_order_search_function to perform the optimization
+            Two_method_crossover_function   Two search methods, with the termination criteria for the first deciding the cross-over point
+
+        Various methods to calculate gradients
+            gradient_exact                  Exact gradient calculations (using eigen-decomposition)
+            gradient_finite_diff            Gradient calculations via finite-differences
+            gradient_first_order_aprox
+
+        Norms for the use in calculation of the fidelity and the gradient
+            Phi0_norm                       Used by PSU_norm and SU_norm, below
+            PSU_norm                        Fidelity in PSU space ("I don't care about global phase")
+            SU_norm                         Fidelity in SU space ("I don care about global phase")
+            gradient_PSU_norm               Gradient norm in PSU space
+            gradient_SU_norm                Gradient norm in SU space
+            initSetNorm                     Normalize the norm functions so that <target | target> = 1
+
+        Caching, delaying and tracking and requesting calculations
+            get_current_value               To compute the current value with the current norm, you need ...
+            get_current_value_Phi0_norm     to compute the phi0 norm, which in turn may require ...
+            get_current_value_setup_recalc  that we mark several slices, Hs, Ps, Us and Ls for calculation
+            recompute_timeslots_now         Scan the OC.timeslots.currPoint structure and compute what is "needed_now"
+            intialize_timeslot_controls     Set intial values for all controls
+            invalidate_timeslots_calc_cache "Forget" all previous calculations (mark everything as stale)
+            update_timeslot_controls        Update a subset of controls, and propagate "stale" markers appropriately        
+            fill_timeslots_cache            Invalidate the cache and force a complete recalculation (mostly
+
+        Miscellaneous
+            calcPfromH_expm                 Calculate P from H by expm
+            calcPfromH_exact_gradient       Calculate P from H when gradient_exact is used. The latter performs an eigen-decomposition, which can be used to efficiently exponentiate
+            dynamo_structure_init           Initialize the OC structure (and print the DYNAMO welcome message)
+            get_current_controls            Return the controls stored in OC.timeSlots.currPoint.controls
+            filter_by_subspace_mask         Look at which timeslots are elected by a mask and "cut" a matrix according to that mask
+            computeHamiltonians             Compute the total Hamiltonians using the drift & control Hamiltonians and the
+
+        General utilities
+            trace_matmul                    Compute trace(A*B) efficiently
+            to_col                          Convert any matrix to a column vector
+
